@@ -9,7 +9,7 @@
 > 📌 이 레포는 **SB9기 4팀 "판타스틱 4"** 팀 프로젝트를 fork하여, 포트폴리오 정리를 위해 README를 재구성한 버전입니다.
 > 원본 레포: [jikang24/sb09-modu-playlist-team4](https://github.com/jikang24/sb09-modu-playlist-team4)
 >
-> **본인(전승현) 담당 영역**: WebSocket, DM, Redis(캐싱·인증·분산락), AWS 인프라·CI/CD
+> **본인(전승현) 담당 영역**: AWS 인프라·CI/CD, WebSocket, DM, Redis
 
 ## Table of Contents
 
@@ -26,11 +26,11 @@
 
 ## My Contributions
 
-- **WebSocket 기반 실시간 DM**: 콘텐츠 채팅 및 사용자 간 다이렉트 메시지 기능 설계·구현
-- **Redis 활용**: 캐싱 전략 수립, 인증(토큰) 관리, ShedLock 기반 분산 락으로 다중 인스턴스 환경에서의 배치 작업 동시성 문제 해결
-- **AWS 인프라 & CI/CD**: 배포 파이프라인 구축 및 인프라 운영
+- **AWS 인프라 & CI/CD**: ECS(Fargate) 배포 파이프라인 구축, ALB/Nginx 리버스 프록시 구성, GitHub Actions 기반 배포 자동화
+- **WebSocket 기반 실시간 DM**: STOMP 프로토콜 기반 다이렉트 메시지, 인증/인가 처리
+- **Redis 활용**: Pub/Sub 기반 실시간 메시지 브로드캐스트, 캐싱 전략
 
-관련 코드: [`dm`](src/main/java/com/mopl/domain/dm) · [`batch`](src/main/java/com/mopl/domain/batch)
+관련 코드: [`dm`](src/main/java/com/mopl/domain/dm) · [`infra`](src/main/java/com/mopl/infra)
 
 > 상세 트러블슈팅 내용은 아래 [Troubleshooting](#troubleshooting) 섹션 참고
 
@@ -88,25 +88,42 @@
 
 ## Troubleshooting
 
-> ⚠️ 아래는 본인이 직접 담당하고 해결한 이슈 중심으로 작성되었습니다. STAR-T 회고 내용을 참고해 구체적인 문제/원인/해결/결과를 채워 넣으세요.
+### 1. Redis Pub/Sub 기반 DM 실시간 전달 실패
 
-### 1. 다중 인스턴스 환경에서 배치 작업 중복 실행 문제
-- **문제**: (예: 여러 서버 인스턴스가 동시에 배치 작업을 실행하면서 중복 처리 발생)
-- **원인**: (예: 분산 환경에서 스케줄러가 각 인스턴스마다 독립적으로 동작)
-- **해결**: ShedLock(Redis) 기반 분산 락 도입으로 단일 인스턴스만 배치 작업을 수행하도록 제어
-- **결과**: (예: 중복 실행으로 인한 데이터 정합성 오류 X% 감소, 또는 관련 장애 재발 방지)
+- **문제**: Redis를 경유해 발행한 DM 메시지가 WebSocket 클라이언트에게 전달되지 않음
+- **원인**:
+  - Redis 채널명은 콜론(`websocket:conversations:{id}:direct-messages`) 기반인데, 접두사만 제거하면 프론트가 구독 중인 슬래시 기반 경로(`/sub/conversations/{id}/direct-messages`)와 형식이 어긋남
+  - 여기에 더해 AWS **ElastiCache Serverless가 PSUBSCRIBE(와일드카드 패턴 구독)를 지원하지 않아** `PatternTopic` 방식 자체가 서버 기동 시점에 실패
+- **해결**: 패턴 구독을 포기하고 도메인별 **고정 채널**로 전환, 동적으로 바뀌는 값(대화방 ID 등)은 채널명이 아니라 payload의 `destination` 필드에 담아 전달
+- **결과**: 실시간 메시지 전달 정상화 + 서버 기동 실패 문제 동시 해결
 
-### 2. WebSocket 기반 실시간 DM 처리 시 이슈
-- **문제**: (예: 동시 접속자 증가 시 연결 관리 이슈, 메시지 유실/지연 등)
-- **원인**: (구체적 원인)
-- **해결**: (구체적 해결 방법)
-- **결과**: (수치화된 결과)
+### 2. WebSocket(STOMP) 인증 정보 유실 — CONNECT는 성공, SUBSCRIBE/SEND는 실패
 
-### 3. Redis 캐싱/인증 관련 이슈
-- **문제**: (예: 캐시 정합성 문제, 토큰 갱신 시 동시성 이슈 등)
-- **원인**: (구체적 원인)
-- **해결**: (구체적 해결 방법)
-- **결과**: (수치화된 결과)
+- **문제**: CONNECT 단계에서는 인증에 성공하지만, 이후 SUBSCRIBE/SEND 단계에서 인증 정보를 찾지 못해 거부(403)됨
+- **원인 추적 과정**:
+  1. `accessor.setUser()`로 CONNECT 시 인증 정보를 저장했으나, STOMP `Message`가 불변 객체라 이 호출이 실제 메시지에 반영되지 않음
+  2. `MessageBuilder.createMessage()`로 새 메시지를 만들어 반영하도록 수정했지만, SEND 시점에서 여전히 인증 정보가 조회되지 않음
+  3. `StompHeaderAccessor.getUser()`가 SEND 시점에는 CONNECT 때 저장한 인증 정보를 못 찾는 것을 확인
+- **해결**: `setUser()` 방식을 버리고, `accessor.getSessionAttributes()`에 JWT Claims를 직접 저장 → CONNECT/SUBSCRIBE/SEND 전 구간에서 동일하게 sessionAttributes를 조회하도록 통일
+- **추가 보강**: `StompAuthInterceptor`에 로그아웃된 토큰의 블랙리스트 체크를 추가(HTTP 필터와 검증 기준 일치), 단 이 체크가 Redis 장애로 막히면 WebSocket 전체가 막히므로 **fail-open**(장애 시 통과 + 에러 로그) 방식으로 가용성을 우선함
+
+### 3. Nginx 리버스 프록시가 실제 트래픽 경로에서 완전히 빠져있던 문제
+
+- **문제**: nginx task가 죽어도 서비스가 정상 동작 — 즉 "ECS Nginx 리버스 프록시 구성" 요구사항이 실질적으로 충족되지 않고 있었음
+- **원인**: HTTPS 적용 작업 중 ALB 443(ACM 인증서) 리스너가 nginx를 건너뛰고 앱 대상 그룹에 직접 연결됨. 게다가 nginx의 upstream이 `ALB:80`을 가리키는 상태였는데, 80번 포트는 이미 https 리다이렉트 전용으로 바뀌어 있어 nginx가 살아있어도 앱에 도달하지 못하는(무한 리다이렉트) 상태였음
+- **해결**:
+  - `사용자 → ALB(443) → nginx → ALB(8080) → 앱` 구조로 재설계
+  - nginx.conf의 upstream을 `ALB:80` → `ALB:8080`으로 변경, 헬스체크용 `/healthz` 추가
+  - ALB에 8080 리스너 신설, nginx 전용 대상 그룹(`nginx-tg`) 생성
+  - 443 리스너의 기본 전달 대상을 앱 대상 그룹 → `nginx-tg`로 전환
+- **결과**: 실제로 리버스 프록시를 경유하는 구조로 정상화, 미션 요구사항 충족
+
+### 4. ECS 배포 Health Check 설정으로 인한 배포 지연 (CD 71% 단축)
+
+- **문제**: 배포 1회에 17분 이상 소요
+- **원인**: Health Check Grace Period(180초)가 실제 정상 판정까지 걸리는 시간(약 255초)보다 짧아 새 태스크가 정상화되기 전에 조기 종료(SIGTERM)됨. 또한 ALB 정상 임계값이 5회 연속 성공으로 설정되어 판정까지의 대기 시간이 과도하게 길었음
+- **해결**: Grace Period를 300초 이상으로 상향, ALB 정상 임계값을 2~3회로 하향
+- **결과**: 배포(CD) 소요시간 **17분 → 5분으로 71% 단축**
 
 ---
 
@@ -116,19 +133,19 @@
 src/main/java/com/mopl
 ├── domain
 │   ├── auth              # 인증/인가, JWT, OAuth2
-│   ├── user              # 사용자
-│   ├── content           # 콘텐츠 (영화/드라마 등)
-│   ├── playlist          # 플레이리스트
-│   ├── review             # 리뷰
-│   ├── follow             # 팔로우
-│   ├── dm                 # 다이렉트 메시지 ⭐ (본인 담당)
-│   ├── contentchat        # 콘텐츠 채팅
-│   ├── conversation       # 대화
-│   ├── watchingsession    # 함께 시청 세션
-│   ├── notification       # 알림
-│   └── batch              # 배치 작업 ⭐ (본인 담당 - 분산 락)
-├── global                 # 공통 설정, 예외 처리, 유틸리티
-└── infra                  # 외부 연동 (S3, OpenSearch, Kafka, TMDB 등) ⭐ (인프라 - 본인 담당)
+│   ├── user               # 사용자
+│   ├── content            # 콘텐츠 (영화/드라마 등)
+│   ├── playlist            # 플레이리스트
+│   ├── review              # 리뷰
+│   ├── follow              # 팔로우
+│   ├── dm                  # 다이렉트 메시지 ⭐ (본인 담당)
+│   ├── contentchat          # 콘텐츠 채팅
+│   ├── conversation         # 대화 ⭐ (본인 담당)
+│   ├── watchingsession       # 함께 시청 세션
+│   ├── notification          # 알림
+│   └── batch                # 배치 작업
+├── global                   # 공통 설정, 예외 처리, 유틸리티
+└── infra                    # 외부 연동 (S3, OpenSearch, Kafka, TMDB 등) ⭐ (인프라 - 본인 담당)
 ```
 
 ---
