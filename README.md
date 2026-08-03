@@ -6,14 +6,33 @@
 
 ![Coverage](https://raw.githubusercontent.com/jikang24/sb09-modu-playlist-team4/badges/.github/badges/coverage.svg)
 
+> 📌 이 레포는 **SB9기 4팀 "판타스틱 4"** 팀 프로젝트를 fork하여, 포트폴리오 정리를 위해 README를 재구성한 버전입니다.
+> 원본 레포: [jikang24/sb09-modu-playlist-team4](https://github.com/jikang24/sb09-modu-playlist-team4)
+>
+> **본인(전승현) 담당 영역**: WebSocket, DM, Redis(캐싱·인증·분산락), AWS 인프라·CI/CD
+
 ## Table of Contents
 
-1. [Core Features](#core-features)
-2. [Technology Stack](#technology-stack)
-3. [File Structure](#file-structure)
-4. [Getting Started](#getting-started)
-5. [API Documentation](#api-documentation)
-6. [Team](#team)
+1. [My Contributions](#my-contributions)
+2. [Core Features](#core-features)
+3. [Technology Stack](#technology-stack)
+4. [Troubleshooting](#troubleshooting)
+5. [File Structure](#file-structure)
+6. [Getting Started](#getting-started)
+7. [API Documentation](#api-documentation)
+8. [Team](#team)
+
+---
+
+## My Contributions
+
+- **WebSocket 기반 실시간 DM**: 콘텐츠 채팅 및 사용자 간 다이렉트 메시지 기능 설계·구현
+- **Redis 활용**: 캐싱 전략 수립, 인증(토큰) 관리, ShedLock 기반 분산 락으로 다중 인스턴스 환경에서의 배치 작업 동시성 문제 해결
+- **AWS 인프라 & CI/CD**: 배포 파이프라인 구축 및 인프라 운영
+
+관련 코드: [`dm`](src/main/java/com/mopl/domain/dm) · [`batch`](src/main/java/com/mopl/domain/batch)
+
+> 상세 트러블슈팅 내용은 아래 [Troubleshooting](#troubleshooting) 섹션 참고
 
 ---
 
@@ -67,6 +86,30 @@
 
 ---
 
+## Troubleshooting
+
+> ⚠️ 아래는 본인이 직접 담당하고 해결한 이슈 중심으로 작성되었습니다. STAR-T 회고 내용을 참고해 구체적인 문제/원인/해결/결과를 채워 넣으세요.
+
+### 1. 다중 인스턴스 환경에서 배치 작업 중복 실행 문제
+- **문제**: (예: 여러 서버 인스턴스가 동시에 배치 작업을 실행하면서 중복 처리 발생)
+- **원인**: (예: 분산 환경에서 스케줄러가 각 인스턴스마다 독립적으로 동작)
+- **해결**: ShedLock(Redis) 기반 분산 락 도입으로 단일 인스턴스만 배치 작업을 수행하도록 제어
+- **결과**: (예: 중복 실행으로 인한 데이터 정합성 오류 X% 감소, 또는 관련 장애 재발 방지)
+
+### 2. WebSocket 기반 실시간 DM 처리 시 이슈
+- **문제**: (예: 동시 접속자 증가 시 연결 관리 이슈, 메시지 유실/지연 등)
+- **원인**: (구체적 원인)
+- **해결**: (구체적 해결 방법)
+- **결과**: (수치화된 결과)
+
+### 3. Redis 캐싱/인증 관련 이슈
+- **문제**: (예: 캐시 정합성 문제, 토큰 갱신 시 동시성 이슈 등)
+- **원인**: (구체적 원인)
+- **해결**: (구체적 해결 방법)
+- **결과**: (수치화된 결과)
+
+---
+
 ## File Structure
 
 ```
@@ -78,14 +121,14 @@ src/main/java/com/mopl
 │   ├── playlist          # 플레이리스트
 │   ├── review             # 리뷰
 │   ├── follow             # 팔로우
-│   ├── dm                 # 다이렉트 메시지
+│   ├── dm                 # 다이렉트 메시지 ⭐ (본인 담당)
 │   ├── contentchat        # 콘텐츠 채팅
 │   ├── conversation       # 대화
 │   ├── watchingsession    # 함께 시청 세션
 │   ├── notification       # 알림
-│   └── batch              # 배치 작업
+│   └── batch              # 배치 작업 ⭐ (본인 담당 - 분산 락)
 ├── global                 # 공통 설정, 예외 처리, 유틸리티
-└── infra                  # 외부 연동 (S3, OpenSearch, Kafka, TMDB 등)
+└── infra                  # 외부 연동 (S3, OpenSearch, Kafka, TMDB 등) ⭐ (인프라 - 본인 담당)
 ```
 
 ---
@@ -204,7 +247,7 @@ SB9기 4팀 - 판타스틱 4
 | 강지원 | [@jikang24](https://github.com/jikang24) | 콘텐츠, 시청세션, Batch, 캐싱전략 구축 |
 | 나은비 | [@nano-mm](https://github.com/nano-mm) | AWS, 플레이리스트, 알림, SSE, Kafka, OpenSearch |
 | 박지은 | [@clover6559](https://github.com/clover6559) | 사용자, OAuth, 팔로우, 인증 및 보안 관리 |
-| 전승현 | [@seunghyeonjeon57-dot](https://github.com/seunghyeonjeon57-dot) | AWS, WebSocket, DM, Redis, 인프라 구축 |
+| 전승현 | [@seunghyeonjeon57-dot](https://github.com/seunghyeonjeon57-dot) | AWS, WebSocket, DM, Redis, 인프라 구축 ([관련 코드](src/main/java/com/mopl/domain/dm)) |
 
 ---
 
