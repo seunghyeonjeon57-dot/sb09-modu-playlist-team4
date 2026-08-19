@@ -1,16 +1,5 @@
 services:
 
-  nginx:
-    build:
-      context: ./nginx
-    container_name: mopl-nginx
-
-    ports:
-      - "80:80"
-
-    depends_on:
-      - app
-
   app:
     build: .
     container_name: mopl-api
@@ -18,8 +7,8 @@ services:
     env_file:
       - .env.dev
 
-    expose:
-      - "8080"
+    ports:
+      - "8080:8080"
 
     restart: unless-stopped
 

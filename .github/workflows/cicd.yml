@@ -97,26 +97,6 @@ jobs:
           docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
           echo "image=$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" >> $GITHUB_OUTPUT
 
-      - name: Notify CI Success
-        if: success() && github.event_name == 'pull_request'
-        uses: sarisia/actions-status-discord@v1
-        with:
-          webhook: ${{ secrets.DISCORD_WEBHOOK_URL }}
-          status: success
-          title: "✅ CI 성공"
-          description: "Gradle 및 Docker 빌드가 완료되었습니다."
-          color: 0x00ff00
-
-      - name: Notify CI Failure
-        if: failure() && github.event_name == 'pull_request'
-        uses: sarisia/actions-status-discord@v1
-        with:
-          webhook: ${{ secrets.DISCORD_WEBHOOK_URL }}
-          status: failure
-          title: "❌ CI 실패"
-          description: "Gradle 또는 Docker 빌드에 실패했습니다."
-          color: 0xff0000
-
   deploy:
     needs: build
     if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch'
@@ -125,67 +105,60 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
+      - name: Prepare EC2 (app dir + docker compose plugin)
+        uses: appleboy/ssh-action@v1
         with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_KEY }}
-          aws-region: ${{ vars.AWS_REGION }}
+          host: ${{ secrets.EC2_HOST }}
+          username: ec2-user
+          key: ${{ secrets.EC2_SSH_KEY }}
+          script: |
+            mkdir -p /home/ec2-user/app
 
-      - name: Download and clean ECS task definition
-        run: |
-          aws ecs describe-task-definition \
-            --task-definition modu-playlist-task \
-            --query taskDefinition \
-            > task-definition.json
+            if ! docker compose version > /dev/null 2>&1; then
+              sudo mkdir -p /usr/local/lib/docker/cli-plugins
+              sudo curl -SL https://github.com/docker/compose/releases/latest/download/docker-compose-linux-x86_64 -o /usr/local/lib/docker/cli-plugins/docker-compose
+              sudo chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
+            fi
 
-          jq 'del(
-            .taskDefinitionArn,
-            .revision,
-            .status,
-            .requiresAttributes,
-            .compatibilities,
-            .registeredAt,
-            .registeredBy,
-            .enableFaultInjection
-          )' task-definition.json > clean-task-definition.json
-
-      - name: Fill in the new image ID in the Amazon ECS task definition
-        id: task-def
-        uses: aws-actions/amazon-ecs-render-task-definition@v1
+      - name: Copy compose file to EC2
+        uses: appleboy/scp-action@v0.1.7
         with:
-          task-definition: clean-task-definition.json
-          container-name: modu-playlist-container
-          image: ${{ needs.build.outputs.image }}
-          environment-variables: |
-            DB_PASSWORD=${{ secrets.DB_PASSWORD }}
-            KAFKA_API_KEY=${{ secrets.KAFKA_API_KEY }}
-            KAFKA_API_SECRET=${{ secrets.KAFKA_API_SECRET }}
+          host: ${{ secrets.EC2_HOST }}
+          username: ec2-user
+          key: ${{ secrets.EC2_SSH_KEY }}
+          source: "compose.prod.yaml"
+          target: "/home/ec2-user/app"
 
-      - name: Deploy Amazon ECS task definition
-        uses: aws-actions/amazon-ecs-deploy-task-definition@v1
+      - name: Deploy to EC2 via SSH
+        uses: appleboy/ssh-action@v1
+        env:
+          ECR_IMAGE: ${{ needs.build.outputs.image }}
+          AWS_REGION: ${{ vars.AWS_REGION }}
+          DB_HOST: ${{ vars.DB_HOST }}
+          DB_PORT: ${{ vars.DB_PORT }}
+          DB_NAME: ${{ vars.DB_NAME }}
+          DB_USERNAME: ${{ vars.DB_USERNAME }}
+          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+          REDIS_HOST: ${{ vars.REDIS_HOST }}
+          REDIS_PORT: ${{ vars.REDIS_PORT }}
+          OPENSEARCH_URI: ${{ vars.OPENSEARCH_URI }}
+          MAIL_USERNAME: ${{ secrets.MAIL_USERNAME }}
+          MAIL_PASSWORD: ${{ secrets.MAIL_PASSWORD }}
+          JWT_SECRET: ${{ secrets.JWT_SECRET }}
+          FRONTEND_BASE_URL: ${{ vars.FRONTEND_BASE_URL }}
         with:
-          task-definition: ${{ steps.task-def.outputs.task-definition }}
-          service: modu-playlist-service
-          cluster: modu-playlist-cluster
-          wait-for-service-stability: true
+          host: ${{ secrets.EC2_HOST }}
+          username: ec2-user
+          key: ${{ secrets.EC2_SSH_KEY }}
+          envs: ECR_IMAGE,AWS_REGION,DB_HOST,DB_PORT,DB_NAME,DB_USERNAME,DB_PASSWORD,REDIS_HOST,REDIS_PORT,OPENSEARCH_URI,MAIL_USERNAME,MAIL_PASSWORD,JWT_SECRET,FRONTEND_BASE_URL
+          script: |
+            cd /home/ec2-user/app
 
-      - name: Notify Deploy Success
-        if: success()
-        uses: sarisia/actions-status-discord@v1
-        with:
-          webhook: ${{ secrets.DISCORD_WEBHOOK_URL }}
-          status: success
-          title: "🚀 CD 성공"
-          description: "Docker 이미지가 ECR에 푸시되고 ECS 배포가 완료되었습니다."
-          color: 0x00ff00
+            REGISTRY="${ECR_IMAGE%%/*}"
+            aws ecr get-login-password --region $AWS_REGION | sudo docker login --username AWS --password-stdin $REGISTRY
 
-      - name: Notify Deploy Failure
-        if: failure()
-        uses: sarisia/actions-status-discord@v1
-        with:
-          webhook: ${{ secrets.DISCORD_WEBHOOK_URL }}
-          status: failure
-          title: "🆘 CD 실패"
-          description: "ECS 배포 중 오류가 발생했습니다."
-          color: 0xff0000
+            sudo docker pull $ECR_IMAGE
+
+            sudo -E docker compose -f compose.prod.yaml up -d
+
+            sudo docker image prune -f
