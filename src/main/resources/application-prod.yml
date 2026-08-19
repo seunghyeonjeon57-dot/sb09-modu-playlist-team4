@@ -63,4 +63,4 @@ app:
   cookie:
     secure: true
   cors:
-    allowed-origins: https://mopl-codeit.link
+    allowed-origins: ${CORS_ALLOWED_ORIGINS:https://mopl-codeit.link}
