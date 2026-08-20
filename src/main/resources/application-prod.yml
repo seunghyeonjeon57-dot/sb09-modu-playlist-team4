@@ -7,9 +7,9 @@ spring:
       client:
         registration:
           google:
-            redirect-uri: "{baseUrl}/login/oauth2/code/google"
+            redirect-uri: https://d2kckx0n2sr31o.cloudfront.net/login/oauth2/code/google
           kakao:
-            redirect-uri: "{baseUrl}/login/oauth2/code/kakao"
+            redirect-uri: https://d2kckx0n2sr31o.cloudfront.net/login/oauth2/code/kakao
   datasource:
     url: jdbc:postgresql://${DB_HOST}:${DB_PORT}/${DB_NAME}
     username: ${DB_USERNAME}
