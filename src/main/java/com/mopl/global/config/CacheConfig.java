@@ -20,8 +20,11 @@ import org.springframework.cache.CacheManager;
 import org.springframework.cache.annotation.CachingConfigurer;
 import org.springframework.cache.annotation.EnableCaching;
 import org.springframework.cache.interceptor.CacheErrorHandler;
+import org.springframework.cache.support.NoOpCacheManager;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.core.env.Environment;
+import org.springframework.core.env.Profiles;
 import org.springframework.data.redis.cache.RedisCacheConfiguration;
 import org.springframework.data.redis.cache.RedisCacheManager;
 import org.springframework.data.redis.connection.RedisConnectionFactory;
@@ -46,10 +49,20 @@ import org.springframework.data.redis.serializer.StringRedisSerializer;
 public class CacheConfig implements CachingConfigurer {
 
   private final RedisConnectionFactory connectionFactory;
+  private final Environment environment;
 
   @Bean
   @Override
   public CacheManager cacheManager() {
+    // 캐싱 적용/미적용 성능 비교용: "nocache" 프로파일이 켜져 있으면 캐시 계층을 통째로 우회한다.
+    // @Cacheable/@CacheEvict 어노테이션은 그대로 동작하지만 NoOpCacheManager는 항상 캐시 미스를
+    // 반환하므로 Redis 네트워크 왕복 자체가 발생하지 않는다 (Redis 서버를 내려서 재현하면
+    // 연결 타임아웃 지연이 섞여 결과가 왜곡되므로 이 방식을 쓴다).
+    if (environment.acceptsProfiles(Profiles.of("nocache"))) {
+      log.info("[Cache] 'nocache' 프로파일 감지 - NoOpCacheManager 사용, 캐싱 비활성화");
+      return new NoOpCacheManager();
+    }
+
     /**
      * GenericJackson2JsonRedisSerializer() 기본 생성자가 만드는
      * ObjectMapper에 JavaTimeModule이 없어서 직접 ObjectMapper를 만들어 모듈 등록
