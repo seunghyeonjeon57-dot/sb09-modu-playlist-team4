@@ -21,12 +21,9 @@ import java.time.Instant;
 import java.time.format.DateTimeParseException;
 import java.util.Set;
 import java.util.stream.Collectors;
-import java.util.concurrent.atomic.AtomicInteger;
 import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
 import org.springframework.cache.annotation.CacheEvict;
 import org.springframework.cache.annotation.Cacheable;
-import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Repository;
 
 import java.util.List;
@@ -46,16 +43,7 @@ import org.springframework.transaction.annotation.Transactional;
  */
 @Repository
 @RequiredArgsConstructor
-@Slf4j
 public class ContentRepositoryImpl implements ContentRepository {
-
-  // TTL 트레이드오프 실험용 임시 카운터 - 실험 끝나면 이 필드/메서드/증가 호출 제거할 것
-  private static final AtomicInteger CACHE_TEST_DB_HIT_COUNTER = new AtomicInteger(0);
-
-  @Scheduled(fixedRate = 5000)
-  public void logCacheTestDbHitCount() {
-    log.info("[CacheTest] DB hit count so far: {}", CACHE_TEST_DB_HIT_COUNTER.get());
-  }
 
   private final ContentJpaRepository jpaRepository;
   private final ContentMapper contentMapper;  // MapStruct 생성 구현체 주입
@@ -93,7 +81,6 @@ public class ContentRepositoryImpl implements ContentRepository {
   @Override
   @Cacheable(value = "content", key = "#id", sync = true)
   public Optional<Content> findById(UUID id) {
-    CACHE_TEST_DB_HIT_COUNTER.incrementAndGet();
     return jpaRepository.findById(id)
         .map(contentMapper::toDomain);
   }

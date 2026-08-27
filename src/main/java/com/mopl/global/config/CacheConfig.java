@@ -15,7 +15,6 @@ import java.util.HashMap;
 import java.util.Map;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.cache.Cache;
 import org.springframework.cache.CacheManager;
 import org.springframework.cache.annotation.CachingConfigurer;
@@ -48,11 +47,6 @@ import org.springframework.data.redis.serializer.StringRedisSerializer;
 public class CacheConfig implements CachingConfigurer {
 
   private final RedisConnectionFactory connectionFactory;
-
-  // TTL vs 캐시 히트율 트레이드오프 실험용 임시 오버라이드 - 기본값은 원래 운영값(30분)과 동일해서
-  // 이 프로퍼티를 안 주면 동작이 그대로 유지된다. 실험 끝나면 이 필드와 아래 삼항 분기는 제거할 것.
-  @Value("${content.cache.ttl-seconds:1800}")
-  private long contentCacheTtlSeconds;
 
   @Bean
   @Override
@@ -87,7 +81,7 @@ public class CacheConfig implements CachingConfigurer {
     cacheConfigs.put("userSummary", defaultConfig.entryTtl(Duration.ofHours(1)));
     // Conversation은 생성 후 참여자/생성일이 절대 안 바뀌는 사실상 불변 데이터라 TTL을 길게 둠
     cacheConfigs.put("conversation", defaultConfig.entryTtl(Duration.ofHours(1)));
-    cacheConfigs.put("content", defaultConfig.entryTtl(Duration.ofSeconds(contentCacheTtlSeconds)));
+    cacheConfigs.put("content", defaultConfig.entryTtl(Duration.ofMinutes(30)));
     cacheConfigs.put("playlist", defaultConfig.entryTtl(Duration.ofMinutes(10)));
     // 구독/팔로우 수는 콘텐츠/플레이리스트 메타데이터보다 더 자주 바뀌므로 TTL을 짧게 둠
     cacheConfigs.put("playlistSubscriberCount", defaultConfig.entryTtl(Duration.ofMinutes(5)));
