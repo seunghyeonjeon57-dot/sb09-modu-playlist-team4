@@ -15,6 +15,7 @@ import java.util.HashMap;
 import java.util.Map;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.cache.Cache;
 import org.springframework.cache.CacheManager;
 import org.springframework.cache.annotation.CachingConfigurer;
@@ -24,6 +25,7 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.data.redis.cache.RedisCacheConfiguration;
 import org.springframework.data.redis.cache.RedisCacheManager;
+import org.springframework.data.redis.cache.RedisCacheWriter;
 import org.springframework.data.redis.connection.RedisConnectionFactory;
 import org.springframework.data.redis.serializer.GenericJackson2JsonRedisSerializer;
 import org.springframework.data.redis.serializer.RedisSerializationContext;
@@ -46,6 +48,11 @@ import org.springframework.data.redis.serializer.StringRedisSerializer;
 public class CacheConfig implements CachingConfigurer {
 
   private final RedisConnectionFactory connectionFactory;
+
+  // TTL vs 캐시 히트율 트레이드오프 실험용 임시 오버라이드 - 기본값은 원래 운영값(30분)과 동일해서
+  // 이 프로퍼티를 안 주면 동작이 그대로 유지된다. 실험 끝나면 이 필드와 아래 삼항 분기는 제거할 것.
+  @Value("${content.cache.ttl-seconds:1800}")
+  private long contentCacheTtlSeconds;
 
   @Bean
   @Override
@@ -80,13 +87,22 @@ public class CacheConfig implements CachingConfigurer {
     cacheConfigs.put("userSummary", defaultConfig.entryTtl(Duration.ofHours(1)));
     // Conversation은 생성 후 참여자/생성일이 절대 안 바뀌는 사실상 불변 데이터라 TTL을 길게 둠
     cacheConfigs.put("conversation", defaultConfig.entryTtl(Duration.ofHours(1)));
-    cacheConfigs.put("content", defaultConfig.entryTtl(Duration.ofMinutes(30)));
+    cacheConfigs.put("content", defaultConfig.entryTtl(Duration.ofSeconds(contentCacheTtlSeconds)));
     cacheConfigs.put("playlist", defaultConfig.entryTtl(Duration.ofMinutes(10)));
     // 구독/팔로우 수는 콘텐츠/플레이리스트 메타데이터보다 더 자주 바뀌므로 TTL을 짧게 둠
     cacheConfigs.put("playlistSubscriberCount", defaultConfig.entryTtl(Duration.ofMinutes(5)));
     cacheConfigs.put("followerCount", defaultConfig.entryTtl(Duration.ofMinutes(5)));
 
-    return RedisCacheManager.builder(connectionFactory)
+    // 기본(non-locking) RedisCacheWriter는 @Cacheable(sync=true)여도 Redis 레벨에서
+    // concurrent miss를 막아주지 않는다 - RedisCache.get(key, valueLoader)가 그대로
+    // RedisCacheWriter.get(...)에 위임되는데, non-locking 구현은 doGet()이 null이면
+    // 곧장 valueLoader(DB 조회)를 실행한다. 즉 sync=true는 이 캐시 구성에서 사실상
+    // 아무 보호도 못 하고 있었음 (Spring Data Redis 공식 문서/소스 확인, 2026-08 재조사).
+    // lockingRedisCacheWriter는 SETNX 기반 락으로 이를 막아주지만, 락 단위가
+    // key가 아니라 "캐시 이름" 단위(content~lock)라 서로 다른 콘텐츠 A/B가 동시에
+    // cold-miss여도 하나가 기다려야 한다 - content 캐시는 트래픽이 적어 감수 가능한
+    // 트레이드오프로 판단해 적용. 트래픽이 커지면 per-key 락(Redisson 등)으로 교체 필요.
+    return RedisCacheManager.builder(RedisCacheWriter.lockingRedisCacheWriter(connectionFactory))
         .cacheDefaults(defaultConfig)
         .withInitialCacheConfigurations(cacheConfigs)
         .transactionAware()

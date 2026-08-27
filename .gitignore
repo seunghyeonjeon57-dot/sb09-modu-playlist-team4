@@ -67,3 +67,6 @@ application-local.yaml
 
 *.txt
 *.json
+
+
+*.env.dev*

@@ -72,7 +72,7 @@ public class PlaylistPersistenceAdapter implements SavePlaylistPort, LoadPlaylis
   }
 
   @Override
-  @Cacheable(value = "playlist", key = "#id")
+  @Cacheable(value = "playlist", key = "#id", sync = true)
   public Optional<Playlist> findById(UUID id) {
     return playlistJpaRepository.findById(id).map(mapper::toDomain);
   }
