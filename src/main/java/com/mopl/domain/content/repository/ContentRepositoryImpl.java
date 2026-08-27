@@ -21,10 +21,7 @@ import java.time.Instant;
 import java.time.format.DateTimeParseException;
 import java.util.Set;
 import java.util.stream.Collectors;
-import java.util.concurrent.atomic.AtomicInteger;
 import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
-import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.cache.annotation.CacheEvict;
 import org.springframework.cache.annotation.Cacheable;
 import org.springframework.stereotype.Repository;
@@ -44,7 +41,6 @@ import org.springframework.transaction.annotation.Transactional;
  *
  * 동적 검색/커서 쿼리는 QueryDSL로 작성 (다른 도메인과 통일)
  */
-@Slf4j
 @Repository
 @RequiredArgsConstructor
 public class ContentRepositoryImpl implements ContentRepository {
@@ -52,14 +48,6 @@ public class ContentRepositoryImpl implements ContentRepository {
   private final ContentJpaRepository jpaRepository;
   private final ContentMapper contentMapper;  // MapStruct 생성 구현체 주입
   private final JPAQueryFactory queryFactory;
-
-  // ⚠️ 캐시 부하테스트 계측용 임시 코드 (트래픽 단계별 DB 히트 수 비교) - 측정 끝나면 제거할 것
-  private static final AtomicInteger CACHE_TEST_DB_HIT_COUNTER = new AtomicInteger(0);
-
-  @Scheduled(fixedRate = 5000)
-  public void logCacheTestDbHitCount() {
-    log.info("[CacheTest] content DB hit count = {}", CACHE_TEST_DB_HIT_COUNTER.get());
-  }
 
   /**
    * watcherCount 등 실시간 데이터는 캐시 제외
@@ -93,7 +81,6 @@ public class ContentRepositoryImpl implements ContentRepository {
   @Override
   @Cacheable(value = "content", key = "#id", sync = true)
   public Optional<Content> findById(UUID id) {
-    CACHE_TEST_DB_HIT_COUNTER.incrementAndGet();  // ⚠️ 임시 계측 코드
     return jpaRepository.findById(id)
         .map(contentMapper::toDomain);
   }
