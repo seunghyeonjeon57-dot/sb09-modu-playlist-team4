@@ -68,6 +68,10 @@ Spring Data Redis의 기본 `RedisCacheWriter`(non-locking)는 `@Cacheable(sync=
 - 분산 트래픽 기준 DB 조회: 13,667건 → 36건 (99.7%↓)
 - p95 응답시간: 247.32ms → 187.61ms (24.1%↓), 평균 81.45ms → 75.13ms (7.8%↓), RPS 273.38 → 282.57 (3.4%↑)
 
+이 수정은 `CacheManager` 빈 하나에 전역으로 적용한 설정이라, 콘텐츠 캐시뿐 아니라 같은 프로젝트에서 캐싱 중인 `playlist`, `playlistSubscriberCount`, `followerCount`, `userSummary`, `conversation` 캐시에도 동일한 락 메커니즘이 구조적으로 함께 적용됩니다. 다만 k6 부하테스트는 인기 콘텐츠일수록 동시 조회 충돌 위험이 가장 큰 콘텐츠 캐시를 대표로 검증했고, 나머지 캐시들의 실제 개선 폭은 별도로 측정하지 않았습니다.
+
+이 락에는 트레이드오프도 있습니다. `lockingRedisCacheWriter`의 락은 개별 키가 아니라 캐시 이름 단위(`content~lock`)로 걸리기 때문에, 서로 다른 콘텐츠 A와 B가 동시에 캐시 미스가 나도 한쪽이 다른 쪽의 락이 풀리길 기다리게 됩니다. 지금 트래픽 규모에서는 감수 가능한 트레이드오프라고 판단했고, 트래픽이 커지면 Redisson 같은 라이브러리로 키 단위 락으로 교체가 필요합니다.
+
 ### 2. STOMP 인증정보 유실 — CONNECT는 성공하지만 SUBSCRIBE/SEND에서 인증 정보가 사라짐
 
 WebSocket CONNECT 시점에는 `StompAuthInterceptor`에서 JWT를 검증하고 인증 정보를 설정했는데, 이후 SUBSCRIBE/SEND 프레임에서는 인증된 사용자 정보가 비어 있는 문제가 있었습니다. STOMP 메시지 객체가 불변(immutable)이라 `accessor.setUser()`로 설정한 값이 이후 프레임까지 반영되지 않는 것이 원인이었고, 세션 단위로 유지되는 `sessionAttributes`에 사용자 정보를 저장해두고 이후 프레임에서 꺼내 쓰는 방식으로 우회했습니다.
