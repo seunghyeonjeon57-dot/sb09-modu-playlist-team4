@@ -45,6 +45,9 @@ public class StompAuthInterceptor implements ChannelInterceptor {
           throw new MoplException(ErrorCode.INVALID_TOKEN);
         }
 
+      // STOMP는 CONNECT/SUBSCRIBE/SEND마다 accessor가 별도로 만들어지고 Message가 불변 객체라,
+      // accessor.setUser()로 세팅한 Principal이 이후 프레임에는 전달되지 않는다 -
+      // 세션 동안 유지되는 sessionAttributes에 직접 담아 SUBSCRIBE 시점에 재사용한다.
       accessor.getSessionAttributes().put("claims", claims);
 
       var authentication = new UsernamePasswordAuthenticationToken(
@@ -54,6 +57,8 @@ public class StompAuthInterceptor implements ChannelInterceptor {
       );
       accessor.setUser(authentication);
 
+      // accessor.setUser() 호출만으로는 원본 Message(불변 객체)에 반영되지 않아,
+      // 갱신된 헤더로 새 Message를 만들어 반환해야 실제로 인증 정보가 전달된다.
       return MessageBuilder.createMessage(message.getPayload(), accessor.getMessageHeaders());
     }catch (MoplException e) {
           log.warn("WebSocket 인증 실패 - {}" , e.getMessage());
