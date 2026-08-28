@@ -8,13 +8,29 @@
 
 ## Table of Contents
 
-1. [Core Features](#core-features)
-2. [Architecture](#architecture)
+1. [Architecture](#architecture)
+2. [Core Features](#core-features)
 3. [Trouble Shooting](#trouble-shooting)
 4. [File Structure](#file-structure)
 5. [Technology Stack](#technology-stack)
-6. [Getting Started](#getting-started)
-7. [API Documentation](#api-documentation)
+
+---
+
+## Architecture
+
+### 인프라 아키텍처 (운영 환경)
+
+![인프라 아키텍처](docs/images/infra-architecture.png)
+
+원래 팀 프로젝트 요구사항은 ECS + nginx + 다중 인스턴스 구성이었습니다. 미션 완료 후 개인적으로 운영 비용과 트래픽 규모를 다시 검토했고, 현재 트래픽 규모를 고려했을 때 ECS의 오토스케일링·다중 인스턴스 구성은 과설계라고 판단해 EC2 단일 인스턴스로 재구성했습니다. Nginx도 제거하고 AWS CloudFront가 리버스 프록시 겸 SSL 종료 역할을 대신하도록 정리했습니다. DB(RDS)·Redis(ElastiCache)·OpenSearch는 애플리케이션과 분리된 AWS 관리형 서비스로 유지해, EC2 인스턴스 자체는 API 서버와 Kafka 컨테이너만 담당합니다. Kafka는 처음엔 Confluent Cloud 같은 완전관리형 서비스도 사용해봤는데, 무료 사용 기간이 끝나면 비용이 발생하고 리소스 사용량도 무거워서 EC2에 컨테이너로 직접 올리는 self-hosted 방식으로 바꿨습니다.
+
+### 헥사고날 아키텍처 (Ports & Adapters)
+
+![헥사고날 아키텍처](docs/images/hexagonal-architecture.png)
+
+도메인별로 Port(인터페이스)와 Adapter(구현체)를 분리해서, 애플리케이션 핵심 로직이 JPA나 다른 도메인의 구현 세부사항을 직접 알지 못하도록 설계했습니다. 위 다이어그램은 제가 담당한 DM 도메인을 예로 든 것으로, WebSocket으로 들어온 요청이 UseCase 인터페이스 → Service(핵심 로직) → Port 인터페이스를 거쳐 실제 Persistence/User 어댑터에 도달하는 흐름을 보여줍니다.
+
+이렇게 분리해서 실제로 얻은 이득은, 단위 테스트에서 실제 DB나 Spring 컨텍스트 없이 `LoadDirectMessagePort`·`SaveDirectMessagePort`·`LoadUserPort`를 Mockito로 mock 처리해서 `DirectMessageService`를 검증할 수 있다는 점입니다(`DirectMessageServiceTest`). User 도메인도 `LoadUserPort`를 통해서만 접근하기 때문에, User 쪽 구현이 바뀌거나 DB를 바꿔도 Adapter만 교체하면 되고 핵심 로직(Service)과 테스트 코드는 영향받지 않습니다.
 
 ---
 
@@ -40,22 +56,6 @@
 
 ---
 
-## Architecture
-
-### 인프라 아키텍처 (운영 환경)
-
-![인프라 아키텍처](docs/images/infra-architecture.png)
-
-원래 팀 프로젝트 요구사항은 ECS + nginx + 다중 인스턴스 구성이었습니다. 미션 완료 후 개인적으로 트래픽 규모와 운영 비용을 다시 검토했고, 실사용자가 없는 포트폴리오 성격의 서비스에서 ECS의 오토스케일링·다중 인스턴스 구성은 과설계라고 판단해 EC2 단일 인스턴스로 재구성했습니다. Nginx도 제거하고 AWS CloudFront가 리버스 프록시 겸 SSL 종료 역할을 대신하도록 정리했습니다. DB(RDS)·Redis(ElastiCache)·OpenSearch는 애플리케이션과 분리된 AWS 관리형 서비스로 유지해, EC2 인스턴스 자체는 API 서버와 Kafka 컨테이너만 담당합니다.
-
-### 헥사고날 아키텍처 (Ports & Adapters)
-
-![헥사고날 아키텍처](docs/images/hexagonal-architecture.png)
-
-도메인별로 Port(인터페이스)와 Adapter(구현체)를 분리해서, 애플리케이션 핵심 로직이 JPA나 다른 도메인의 구현 세부사항을 직접 알지 못하도록 설계했습니다. 위 다이어그램은 제가 담당한 DM 도메인을 예로 든 것으로, WebSocket으로 들어온 요청이 UseCase 인터페이스 → Service(핵심 로직) → Port 인터페이스를 거쳐 실제 Persistence/User 어댑터에 도달하는 흐름을 보여줍니다. DB를 바꾸거나 다른 도메인 호출 방식이 바뀌어도 Adapter만 교체하면 되고, 핵심 로직과 테스트 코드는 영향받지 않습니다.
-
----
-
 ## Trouble Shooting
 
 ### 1. Redis 캐시 스탬피드 — 동시 요청 시 DB 조회가 이론치보다 많이 발생
@@ -68,17 +68,17 @@ Spring Data Redis의 기본 `RedisCacheWriter`(non-locking)는 `@Cacheable(sync=
 - 분산 트래픽 기준 DB 조회: 13,667건 → 36건 (99.7%↓)
 - p95 응답시간: 247.32ms → 187.61ms (24.1%↓), 평균 81.45ms → 75.13ms (7.8%↓), RPS 273.38 → 282.57 (3.4%↑)
 
-### 2. N+1 문제 — DM/대화 목록 조회 시 발신자·수신자 조회가 목록 크기만큼 반복
-
-DM 목록과 대화(Conversation) 목록을 조회할 때, 목록을 순회하면서 각 메시지/대화마다 상대방 User 정보를 건별로 조회하고 있었습니다 (`getUserSummary()`를 메시지 개수만큼 반복 호출). 목록이 N개면 조회 쿼리가 N번 추가로 나가는 구조였습니다.
-
-id를 먼저 모아서 한 번에 조회하는 벌크 메서드(`getUserSummaries`, `getLatestBulk`, `hasUnreadBulk`)를 추가하고, 반복문 안에서는 이미 조회해 둔 Map에서 꺼내 쓰도록 바꿨습니다. 대화방별 최근 메시지 조회도 상관 서브쿼리 대신, `GROUP BY`로 대화방별 최신 시각을 먼저 한 번에 구하고 그 시각들로 실제 메시지 행을 다시 한 번에 조회하는 2단계 방식으로 처리해 N+1을 피했습니다. 건별 메서드가 다시 호출되지 않는지 확인하는 회귀 테스트도 함께 추가했습니다.
-
-### 3. STOMP 인증정보 유실 — CONNECT는 성공하지만 SUBSCRIBE/SEND에서 인증 정보가 사라짐
+### 2. STOMP 인증정보 유실 — CONNECT는 성공하지만 SUBSCRIBE/SEND에서 인증 정보가 사라짐
 
 WebSocket CONNECT 시점에는 `StompAuthInterceptor`에서 JWT를 검증하고 인증 정보를 설정했는데, 이후 SUBSCRIBE/SEND 프레임에서는 인증된 사용자 정보가 비어 있는 문제가 있었습니다. STOMP 메시지 객체가 불변(immutable)이라 `accessor.setUser()`로 설정한 값이 이후 프레임까지 반영되지 않는 것이 원인이었고, 세션 단위로 유지되는 `sessionAttributes`에 사용자 정보를 저장해두고 이후 프레임에서 꺼내 쓰는 방식으로 우회했습니다.
 
 로그아웃/탈퇴한 사용자의 토큰을 즉시 무효화하기 위한 Redis 기반 블랙리스트(`RedisAuthTokenService`, 키 패턴 `auth:blacklist:{jti}`)도 함께 구성했습니다. 인메모리가 아닌 Redis에 저장하도록 설계한 건 다중 인스턴스로 확장할 경우 블랙리스트를 인스턴스끼리 공유하기 위해서였는데, 현재는 EC2 단일 인스턴스로 운영 중이라 그 이점을 실제로 활용하고 있진 않습니다. 블랙리스트 조회(Redis) 자체가 실패하는 경우에는 인증을 막지 않고 통과시키도록 처리했는데, 이는 보안보다 가용성을 우선한 선택으로 트레이드오프가 있는 부분입니다.
+
+### 3. N+1 문제 — DM/대화 목록 조회 시 발신자·수신자 조회가 목록 크기만큼 반복
+
+DM 목록과 대화(Conversation) 목록을 조회할 때, 목록을 순회하면서 각 메시지/대화마다 상대방 User 정보를 건별로 조회하고 있었습니다 (`getUserSummary()`를 메시지 개수만큼 반복 호출). 목록이 N개면 조회 쿼리가 N번 추가로 나가는 구조였습니다.
+
+id를 먼저 모아서 한 번에 조회하는 벌크 메서드(`getUserSummaries`, `getLatestBulk`, `hasUnreadBulk`)를 추가하고, 반복문 안에서는 이미 조회해 둔 Map에서 꺼내 쓰도록 바꿨습니다. 대화방별 최근 메시지 조회도 상관 서브쿼리 대신, `GROUP BY`로 대화방별 최신 시각을 먼저 한 번에 구하고 그 시각들로 실제 메시지 행을 다시 한 번에 조회하는 2단계 방식으로 처리해 N+1을 피했습니다. 건별 메서드가 다시 호출되지 않는지 확인하는 회귀 테스트도 함께 추가했습니다.
 
 ---
 
@@ -132,111 +132,6 @@ src/main/java/com/mopl
 **Test**: JUnit5, Spring Security Test, Spring Batch Test, Testcontainers, Awaitility, H2, JaCoCo
 
 **Build / Infra**: Gradle, Docker, Docker Compose
-
----
-
-## Getting Started
-
-### 요구 사항
-
-- JDK 17
-- Docker / Docker Compose
-
-### 환경 변수 설정
-
-`.env.dev` 파일을 참고하여 프로젝트 루트에 필요한 환경 변수 파일(`.env` 또는 `.env.dev`)을 구성합니다.
-
-```
-SPRING_PROFILES_ACTIVE=
-SERVER_PORT=
-FRONTEND_BASE_URL=
-
-# DB
-DB_HOST=
-DB_PORT=
-DB_NAME=
-DB_USERNAME=
-DB_PASSWORD=
-
-# Redis
-REDIS_HOST=
-REDIS_PORT=
-
-# Kafka
-KAFKA_BOOTSTRAP_SERVERS=
-KAFKA_API_KEY=
-KAFKA_API_SECRET=
-
-# OpenSearch
-OPENSEARCH_URI=
-OPENSEARCH_INITIAL_ADMIN_PASSWORD=
-
-# JWT
-JWT_SECRET=
-JWT_ACCESS_TOKEN_EXPIRY_MS=
-JWT_REFRESH_TOKEN_EXPIRY_MS=
-
-# Mail
-MAIL_USERNAME=
-MAIL_PASSWORD=
-
-# TMDB
-TMDB_API_KEY=
-TMDB_ACCESS_TOKEN=
-
-# AWS S3
-CLOUD_AWS_REGION_STATIC=
-CLOUD_AWS_CREDENTIALS_ACCESS_KEY=
-CLOUD_AWS_CREDENTIALS_SECRET_KEY=
-
-# OAuth2
-KAKAO_CLIENT_ID=
-KAKAO_CLIENT_SECRET=
-GOOGLE_CLIENT_ID=
-GOOGLE_CLIENT_SECRET=
-```
-
-### 로컬 실행 (Docker Compose)
-
-```bash
-docker compose up -d --build
-```
-
-API 서버(8080), PostgreSQL(5432), Redis(6379), Kafka(9092), OpenSearch(9200)가 함께 기동됩니다.
-
-### 로컬 실행 (Gradle)
-
-인프라(DB, Redis, Kafka, OpenSearch 등)만 별도로 띄운 뒤 애플리케이션을 직접 실행할 수 있습니다.
-
-```bash
-./gradlew bootRun
-```
-
-기본 프로파일은 `dev`이며, `local`/`test`/`prod` 프로파일은 `src/main/resources/application-{profile}.yml`에서 확인할 수 있습니다.
-
-### 빌드
-
-```bash
-./gradlew build
-```
-
-### 테스트
-
-```bash
-./gradlew test
-```
-
-테스트 실행 후 JaCoCo 커버리지 리포트가 `build/reports/jacoco/test/html/index.html`에 생성됩니다.
-
----
-
-## API Documentation
-
-애플리케이션 실행 후 Swagger UI에서 API 명세를 확인할 수 있습니다.
-
-```
-http://localhost:8080/swagger-ui/index.html
-```
 
 ---
 
