@@ -141,4 +141,4 @@ src/main/java/com/mopl
 
 ## 구현 홈페이지
 
-현재 비용 절감을 위해 서비스를 잠시 내려둔 상태입니다. (링크 업데이트 예정)
+[https://d2kckx0n2sr31o.cloudfront.net](url) (opensearch는 비용문제로 잠시 내린상황입니다)
